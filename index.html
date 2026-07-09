@@ -282,14 +282,11 @@ function render(){
   bindEvents();
 }
 
-function renderDashboard(){
+function getTeamSummary(){
   const active = STATE.cases.filter(c=>c.status!=="Discharged");
-  if(active.length===0){
-    return `<div class="card"><div class="empty">No active cases yet. Open <b>Cases</b> to start one.</div></div>`;
-  }
   const computed = active.map(c=>({c, comp:computeCase(c.answers)}));
   const blocked = computed.filter(x=>x.comp.criticalGates>0).length;
-  const avgReadiness = Math.round(computed.reduce((s,x)=>s+x.comp.readiness,0)/computed.length*10)/10;
+  const avgReadiness = computed.length ? Math.round(computed.reduce((s,x)=>s+x.comp.readiness,0)/computed.length*10)/10 : 0;
   const allBarriers = [];
   computed.forEach(x=>{
     x.comp.barrierRows.forEach(b=>allBarriers.push({...b, caseId:x.c.id, caseLabel:x.c.label}));
@@ -298,6 +295,14 @@ function renderDashboard(){
     const order = {"Blocks discharge until resolved":0,"Requires confirmed mitigation before discharge":1,"Review/mitigate before discharge":2,"Monitor":3};
     return (order[a.impact]-order[b.impact]) || (b.serviceLevel-a.serviceLevel);
   });
+  return {active, computed, blocked, avgReadiness, allBarriers};
+}
+
+function renderDashboard(){
+  const {active, blocked, avgReadiness, allBarriers} = getTeamSummary();
+  if(active.length===0){
+    return `<div class="card"><div class="empty">No active cases yet. Open <b>Cases</b> to start one.</div></div>`;
+  }
   let rows = allBarriers.slice(0,15).map(b=>`
     <tr>
       <td><a data-open-case="${b.caseId}" style="color:var(--accent);font-weight:600;cursor:pointer;">${escapeHtml(b.caseLabel)}</a></td>
@@ -318,7 +323,10 @@ function renderDashboard(){
     <div class="metric"><div class="lbl">Open barriers, team-wide</div><div class="val">${allBarriers.length}</div></div>
   </div>
   <div class="card">
-    <h2>Barrier board — all active cases, whole team</h2>
+    <div class="toprow">
+      <h2 style="margin:0;">Barrier board — all active cases, whole team</h2>
+      <button class="btn small" id="emailTeamBtn">Email barrier board</button>
+    </div>
     <table>
       <tr><th>Case</th><th>Domain</th><th>Barrier</th><th>Suggested service</th><th>Risk</th><th>Discharge impact</th></tr>
       ${rows}
@@ -419,6 +427,7 @@ function renderCaseDetail(caseId){
         <div style="font-size:12px;color:var(--ink-faint);">Assessed by ${escapeHtml(c.assessor||"—")} · updated ${new Date(c.updatedAt).toLocaleString()}</div>
       </div>
       <div style="display:flex;gap:8px;">
+        <button class="btn small" id="emailCaseBtn">Email summary</button>
         <button class="btn small" id="toggleDischarged">${c.status==="Discharged"?"Reopen case":"Mark discharged"}</button>
       </div>
     </div>
@@ -438,6 +447,60 @@ function renderCaseDetail(caseId){
     <h2>Assessment</h2>
     ${accordions}
   </div>`;
+}
+
+function openMailto(subject, body){
+  window.location.href = "mailto:?subject="+encodeURIComponent(subject)+"&body="+encodeURIComponent(body);
+}
+
+function buildCaseEmailBody(c, comp){
+  const lines = [];
+  lines.push("Discharge readiness summary");
+  lines.push("Case: "+c.label);
+  lines.push("Assessed by: "+(c.assessor||"—"));
+  lines.push("Updated: "+new Date(c.updatedAt).toLocaleString());
+  lines.push("");
+  lines.push("Status: "+comp.status);
+  lines.push("Readiness: "+comp.readiness+"%");
+  lines.push("Open barriers: "+comp.openBarriers);
+  lines.push("Critical gates blocking discharge: "+comp.criticalGates);
+  lines.push("Highest estimated service level: "+comp.maxService);
+  lines.push("");
+  lines.push("Domain breakdown:");
+  comp.domains.forEach(d=>{
+    lines.push("- "+d.domain+": "+(d.pct===null?"—":d.pct+"%")+" ("+d.barriers+" barrier(s), max service level "+d.maxService+")");
+  });
+  lines.push("");
+  lines.push("Open barriers:");
+  if(comp.barrierRows.length===0) lines.push("None");
+  else comp.barrierRows.forEach(b=>{
+    lines.push("- ["+b.domain+"] "+b.barrier+" — suggested: "+b.service+" — risk: "+b.residual+" — "+b.impact);
+  });
+  lines.push("");
+  lines.push("Generated from the unit discharge readiness pilot tool. Not a validated diagnostic tool — professional judgement required.");
+  return lines.join("\n");
+}
+
+function buildTeamEmailBody(){
+  const {active, blocked, avgReadiness, allBarriers} = getTeamSummary();
+  const lines = [];
+  lines.push("Team barrier board — "+new Date().toLocaleString());
+  lines.push("Active cases: "+active.length);
+  lines.push("Avg readiness: "+avgReadiness+"%");
+  lines.push("Cases blocked by critical gate: "+blocked);
+  lines.push("");
+  lines.push("Open barriers, highest priority first:");
+  if(allBarriers.length===0) lines.push("None");
+  else{
+    const shown = allBarriers.slice(0,30);
+    shown.forEach(b=>{
+      lines.push("- ["+b.caseLabel+"] "+b.domain+": "+b.barrier+" — suggested: "+b.service+" — risk: "+b.residual+" — "+b.impact);
+    });
+    if(allBarriers.length>30) lines.push("+ "+(allBarriers.length-30)+" more not shown — open the app for the full list.");
+  }
+  lines.push("");
+  lines.push("Generated from the unit discharge readiness pilot tool. Not a validated diagnostic tool — professional judgement required.");
+  return lines.join("\n");
 }
 
 function bindEvents(){
@@ -467,6 +530,20 @@ function bindEvents(){
       render();
     };
   });
+  const emailCaseBtn = document.getElementById("emailCaseBtn");
+  if(emailCaseBtn){
+    emailCaseBtn.onclick = ()=>{
+      const c = STATE.cases.find(x=>x.id===STATE.openCaseId);
+      const comp = computeCase(c.answers);
+      openMailto("Discharge readiness — "+c.label, buildCaseEmailBody(c, comp));
+    };
+  }
+  const emailTeamBtn = document.getElementById("emailTeamBtn");
+  if(emailTeamBtn){
+    emailTeamBtn.onclick = ()=>{
+      openMailto("Team barrier board — "+new Date().toLocaleDateString(), buildTeamEmailBody());
+    };
+  }
   const dischargedBtn = document.getElementById("toggleDischarged");
   if(dischargedBtn){
     dischargedBtn.onclick = async ()=>{
