@@ -95,7 +95,21 @@
 <body>
 <div class="app" id="app"></div>
 
-<script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getFirestore, collection, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDpMYqugyZZiwqzkCmABbeoXYnDNxquenM",
+  authDomain: "discharge-readiness.firebaseapp.com",
+  projectId: "discharge-readiness",
+  storageBucket: "discharge-readiness.firebasestorage.app",
+  messagingSenderId: "559026797221",
+  appId: "1:559026797221:web:322ea7ac02bf5c14f86b4c"
+};
+const fbApp = initializeApp(firebaseConfig);
+const db = getFirestore(fbApp);
+
 const QUESTIONS = [
   {domain:"Medical Stability", q:"Are vital signs stable within an acceptable clinical range?", w:5, gate:true, barrier:"Medical instability", service:"Home nursing / clinical follow-up"},
   {domain:"Medical Stability", q:"Are acute symptoms stable or improving rather than worsening?", w:5, gate:true, barrier:"Worsening symptoms", service:"Clinical reassessment"},
@@ -215,28 +229,28 @@ function domainColor(pct){
 
 let STATE = {view:"dashboard", cases:[], openCaseId:null, openAccordion:null, loading:true};
 
-async function loadCases(){
-  const res = await window.storage.list("case:", true);
-  const keys = res ? res.keys : [];
-  const cases = [];
-  for(const k of keys){
-    try{
-      const r = await window.storage.get(k, true);
-      if(r) cases.push(JSON.parse(r.value));
-    }catch(e){}
-  }
-  cases.sort((a,b)=>b.updatedAt - a.updatedAt);
-  STATE.cases = cases;
-  STATE.loading = false;
-  render();
+function startRealtimeSync(){
+  const casesCol = collection(db, "cases");
+  onSnapshot(casesCol, (snapshot)=>{
+    const cases = [];
+    snapshot.forEach(docSnap=>cases.push(docSnap.data()));
+    cases.sort((a,b)=>b.updatedAt - a.updatedAt);
+    STATE.cases = cases;
+    STATE.loading = false;
+    render();
+  }, (err)=>{
+    STATE.loading = false;
+    STATE.syncError = err.message;
+    render();
+  });
 }
 
 async function saveCase(c){
   c.updatedAt = Date.now();
-  await window.storage.set("case:"+c.id, JSON.stringify(c), true);
   const idx = STATE.cases.findIndex(x=>x.id===c.id);
   if(idx>=0) STATE.cases[idx]=c; else STATE.cases.unshift(c);
   STATE.cases.sort((a,b)=>b.updatedAt - a.updatedAt);
+  await setDoc(doc(db, "cases", c.id), c);
 }
 
 function newCaseId(){
@@ -252,6 +266,7 @@ function escapeHtml(s){
 function render(){
   const app = document.getElementById("app");
   if(STATE.loading){ app.innerHTML = `<div class="empty">Loading team board…</div>`; return; }
+  if(STATE.syncError){ app.innerHTML = `<div class="empty">Could not connect to the shared database.<br>${escapeHtml(STATE.syncError)}<br>Check Firestore rules and config.</div>`; return; }
   let html = `
   <div class="topbar">
     <div class="brand"><h1>Discharge readiness</h1><span class="tag">Unit pilot · de-identified</span></div>
@@ -475,7 +490,7 @@ function bindEvents(){
   });
 }
 
-loadCases();
+startRealtimeSync();
 </script>
 </body>
 </html>
