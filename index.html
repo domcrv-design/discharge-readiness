@@ -85,7 +85,7 @@
   .backlink{font-size:13px;color:var(--accent);cursor:pointer;font-weight:600;margin-bottom:10px;display:inline-block;}
   .toprow{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;}
   .warn-note{font-size:12px;color:var(--ink-faint);background:var(--bg);border-radius:8px;padding:8px 10px;margin-top:8px;}
-  .newcase-form{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;}
+  .newcase-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:10px;}
   @media (max-width:600px){
     .domain-name{width:120px;font-size:11.5px;}
     .newcase-form{grid-template-columns:1fr;}
@@ -158,6 +158,19 @@ const ABILITY_SCORE = {"Independent / no issue":1,"Minor limitation":0.75,"Needs
 const SEVERITY_SCORE = {"None":0,"Low":1,"Moderate":2,"High":3,"Critical":4};
 const AVAIL_SCORE = {"Confirmed":0,"Available but not confirmed":1,"Limited":2,"Unavailable":3,"Unknown":3};
 const STATUS_SCORE = {"Not required":0,"Recommended":2,"Requested":2,"Confirmed":0,"Unavailable":4};
+
+function getTargetInfo(targetDate){
+  if(!targetDate) return null;
+  const target = new Date(targetDate+"T00:00:00");
+  const today = new Date(); today.setHours(0,0,0,0);
+  const diffDays = Math.round((target - today) / 86400000);
+  let label, bg, ink;
+  if(diffDays < 0){ label = "Overdue "+Math.abs(diffDays)+"d"; bg="var(--risk-vh-bg)"; ink="var(--risk-vh-ink)"; }
+  else if(diffDays === 0){ label = "Due today"; bg="var(--risk-mod-bg)"; ink="var(--risk-mod-ink)"; }
+  else if(diffDays === 1){ label = "Due tomorrow"; bg="var(--risk-mod-bg)"; ink="var(--risk-mod-ink)"; }
+  else { label = diffDays+"d left"; bg="var(--risk-low-bg)"; ink="var(--risk-low-ink)"; }
+  return {label, bg, ink, diffDays};
+}
 
 function defaultAnswer(){
   return {response:"Independent / no issue", severity:"None", support:"Confirmed", status:"Not required", mitigation:"", frequency:"", confirmed:"No"};
@@ -292,6 +305,10 @@ function getTeamSummary(){
   const computed = active.map(c=>({c, comp:computeCase(c.answers)}));
   const blocked = computed.filter(x=>x.comp.criticalGates>0).length;
   const avgReadiness = computed.length ? Math.round(computed.reduce((s,x)=>s+x.comp.readiness,0)/computed.length*10)/10 : 0;
+  const pastTarget = computed.filter(x=>{
+    const t = getTargetInfo(x.c.targetDate);
+    return t && t.diffDays < 0;
+  }).length;
   const allBarriers = [];
   computed.forEach(x=>{
     x.comp.barrierRows.forEach(b=>allBarriers.push({...b, caseId:x.c.id, caseLabel:x.c.label}));
@@ -300,11 +317,11 @@ function getTeamSummary(){
     const order = {"Blocks discharge until resolved":0,"Requires confirmed mitigation before discharge":1,"Review/mitigate before discharge":2,"Monitor":3};
     return (order[a.impact]-order[b.impact]) || (b.serviceLevel-a.serviceLevel);
   });
-  return {active, computed, blocked, avgReadiness, allBarriers};
+  return {active, computed, blocked, avgReadiness, pastTarget, allBarriers};
 }
 
 function renderDashboard(){
-  const {active, blocked, avgReadiness, allBarriers} = getTeamSummary();
+  const {active, blocked, avgReadiness, pastTarget, allBarriers} = getTeamSummary();
   if(active.length===0){
     return `<div class="card"><div class="empty">No active cases yet. Open <b>Cases</b> to start one.</div></div>`;
   }
@@ -326,6 +343,7 @@ function renderDashboard(){
     <div class="metric"><div class="lbl">Avg readiness</div><div class="val">${avgReadiness}%</div></div>
     <div class="metric"><div class="lbl">Blocked by critical gate</div><div class="val">${blocked}</div></div>
     <div class="metric"><div class="lbl">Open barriers, team-wide</div><div class="val">${allBarriers.length}</div></div>
+    <div class="metric"><div class="lbl">Past target date</div><div class="val" style="${pastTarget>0?'color:var(--risk-vh-ink);':''}">${pastTarget}</div></div>
   </div>
   <div class="card">
     <div class="toprow">
@@ -342,9 +360,10 @@ function renderDashboard(){
 function renderCaseList(){
   const rows = STATE.cases.map(c=>{
     const comp = computeCase(c.answers);
+    const t = getTargetInfo(c.targetDate);
     return `<div class="caselist-item" data-open-case="${c.id}">
       <div class="caselist-left">
-        <div class="id">${escapeHtml(c.label)} ${c.status==="Discharged"?'<span class="pill" style="background:var(--bg);color:var(--ink-faint);margin-left:6px;">Discharged</span>':''}</div>
+        <div class="id">${escapeHtml(c.label)} ${c.status==="Discharged"?'<span class="pill" style="background:var(--bg);color:var(--ink-faint);margin-left:6px;">Discharged</span>':''} ${t?`<span class="pill" style="background:${t.bg};color:${t.ink};margin-left:6px;">${t.label}</span>`:''}</div>
         <div class="meta">Assessed by ${escapeHtml(c.assessor||"—")} · updated ${new Date(c.updatedAt).toLocaleString()}</div>
       </div>
       <div style="display:flex;align-items:center;gap:12px;flex-shrink:0;">
@@ -362,6 +381,7 @@ function renderCaseList(){
     <div class="newcase-form">
       <div><label class="f">Case ID (bed / room, no patient name)</label><input type="text" id="newCaseLabel" placeholder="e.g. Bed 4B — Jul 9"></div>
       <div><label class="f">Assessed by (initials)</label><input type="text" id="newCaseAssessor" placeholder="e.g. J.T."></div>
+      <div><label class="f">Target discharge date (optional)</label><input type="date" id="newCaseTarget"></div>
     </div>
     <div class="warn-note">Do not enter patient names or other identifiers here — use a bed, room, or unit-issued case number.</div>
     <div style="margin-top:10px;"><button class="btn primary" id="createCaseBtn">Start assessment</button></div>
@@ -376,6 +396,7 @@ function renderCaseDetail(caseId){
   const c = STATE.cases.find(x=>x.id===caseId);
   if(!c) return `<div class="card"><div class="empty">Case not found.</div></div>`;
   const comp = computeCase(c.answers);
+  const targetInfo = getTargetInfo(c.targetDate);
   const statusColor = comp.criticalGates>0 ? ["var(--risk-vh-bg)","var(--risk-vh-ink)"] : comp.maxService>=4 ? ["var(--risk-high-bg)","var(--risk-high-ink)"] : comp.readiness>=85 ? ["var(--risk-low-bg)","var(--risk-low-ink)"] : ["var(--risk-mod-bg)","var(--risk-mod-ink)"];
 
   let domainRows = comp.domains.map(d=>`
@@ -433,6 +454,11 @@ function renderCaseDetail(caseId){
       <div>
         <h2 style="font-size:17px;margin-bottom:4px;">${escapeHtml(c.label)}</h2>
         <div style="font-size:12px;color:var(--ink-faint);">Assessed by ${escapeHtml(c.assessor||"—")} · updated ${new Date(c.updatedAt).toLocaleString()}</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+          <label class="f" style="margin:0;">Target discharge</label>
+          <input type="date" id="caseTargetDate" value="${c.targetDate||''}" style="width:auto;padding:5px 8px;font-size:12.5px;">
+          ${targetInfo?`<span class="pill" style="background:${targetInfo.bg};color:${targetInfo.ink};">${targetInfo.label}</span>`:''}
+        </div>
       </div>
       <div style="display:flex;gap:8px;">
         <button class="btn small" id="emailCaseBtn">Email summary</button>
@@ -468,6 +494,8 @@ function buildCaseEmailBody(c, comp){
   lines.push("Case: "+c.label);
   lines.push("Assessed by: "+(c.assessor||"—"));
   lines.push("Updated: "+new Date(c.updatedAt).toLocaleString());
+  const t = getTargetInfo(c.targetDate);
+  lines.push("Target discharge date: "+(c.targetDate||"Not set")+(t?" ("+t.label+")":""));
   lines.push("");
   lines.push("Status: "+comp.status);
   lines.push("Readiness: "+comp.readiness+"%");
@@ -524,8 +552,9 @@ function bindEvents(){
     createBtn.onclick = async ()=>{
       const label = document.getElementById("newCaseLabel").value.trim();
       const assessor = document.getElementById("newCaseAssessor").value.trim();
+      const targetDate = document.getElementById("newCaseTarget").value || null;
       if(!label){ document.getElementById("newCaseLabel").focus(); return; }
-      const c = {id:newCaseId(), label, assessor, status:"Active", createdAt:Date.now(), updatedAt:Date.now(), answers: QUESTIONS.map(()=>defaultAnswer())};
+      const c = {id:newCaseId(), label, assessor, targetDate, status:"Active", createdAt:Date.now(), updatedAt:Date.now(), answers: QUESTIONS.map(()=>defaultAnswer())};
       createBtn.disabled = true; createBtn.textContent = "Creating…";
       await saveCase(c);
       STATE.openCaseId = c.id; STATE.view = "case"; STATE.openAccordion = DOMAIN_ORDER[0];
@@ -539,6 +568,15 @@ function bindEvents(){
       render();
     };
   });
+  const targetDateInput = document.getElementById("caseTargetDate");
+  if(targetDateInput){
+    targetDateInput.onchange = async ()=>{
+      const c = STATE.cases.find(x=>x.id===STATE.openCaseId);
+      c.targetDate = targetDateInput.value || null;
+      await saveCase(c);
+      render();
+    };
+  }
   const emailCaseBtn = document.getElementById("emailCaseBtn");
   if(emailCaseBtn){
     emailCaseBtn.onclick = ()=>{
