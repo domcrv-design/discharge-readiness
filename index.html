@@ -97,7 +97,7 @@
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getFirestore, collection, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyDpMYqugyZZiwqzkCmABbeoXYnDNxquenM",
@@ -253,6 +253,11 @@ async function saveCase(c){
   await setDoc(doc(db, "cases", c.id), c);
 }
 
+async function deleteCase(caseId){
+  STATE.cases = STATE.cases.filter(x=>x.id!==caseId);
+  await deleteDoc(doc(db, "cases", caseId));
+}
+
 function newCaseId(){
   return "c" + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
 }
@@ -342,9 +347,12 @@ function renderCaseList(){
         <div class="id">${escapeHtml(c.label)} ${c.status==="Discharged"?'<span class="pill" style="background:var(--bg);color:var(--ink-faint);margin-left:6px;">Discharged</span>':''}</div>
         <div class="meta">Assessed by ${escapeHtml(c.assessor||"—")} · updated ${new Date(c.updatedAt).toLocaleString()}</div>
       </div>
-      <div style="text-align:right;flex-shrink:0;">
-        <div style="font-family:var(--font-mono);font-weight:700;font-size:15px;">${comp.readiness}%</div>
-        <div style="font-size:11.5px;color:var(--ink-faint);">${comp.openBarriers} barrier${comp.openBarriers===1?'':'s'}${comp.criticalGates>0?' · critical gate':''}</div>
+      <div style="display:flex;align-items:center;gap:12px;flex-shrink:0;">
+        <div style="text-align:right;">
+          <div style="font-family:var(--font-mono);font-weight:700;font-size:15px;">${comp.readiness}%</div>
+          <div style="font-size:11.5px;color:var(--ink-faint);">${comp.openBarriers} barrier${comp.openBarriers===1?'':'s'}${comp.criticalGates>0?' · critical gate':''}</div>
+        </div>
+        <button class="btn small" data-delete-case="${c.id}" data-case-label="${escapeHtml(c.label)}" title="Delete case" style="color:var(--risk-vh-ink);">Delete</button>
       </div>
     </div>`;
   }).join("");
@@ -429,6 +437,7 @@ function renderCaseDetail(caseId){
       <div style="display:flex;gap:8px;">
         <button class="btn small" id="emailCaseBtn">Email summary</button>
         <button class="btn small" id="toggleDischarged">${c.status==="Discharged"?"Reopen case":"Mark discharged"}</button>
+        <button class="btn small" id="deleteCaseBtn" style="color:var(--risk-vh-ink);">Delete</button>
       </div>
     </div>
     <div class="status-banner" style="background:${statusColor[0]};color:${statusColor[1]};margin-top:12px;">${escapeHtml(comp.status)}</div>
@@ -542,6 +551,27 @@ function bindEvents(){
   if(emailTeamBtn){
     emailTeamBtn.onclick = ()=>{
       openMailto("Team barrier board — "+new Date().toLocaleDateString(), buildTeamEmailBody());
+    };
+  }
+  document.querySelectorAll("[data-delete-case]").forEach(el=>{
+    el.onclick = async (e)=>{
+      e.stopPropagation();
+      const id = el.getAttribute("data-delete-case");
+      const label = el.getAttribute("data-case-label");
+      if(!window.confirm("Delete case \""+label+"\"? This removes it permanently for the whole team and cannot be undone.")) return;
+      await deleteCase(id);
+      render();
+    };
+  });
+  const deleteCaseBtn = document.getElementById("deleteCaseBtn");
+  if(deleteCaseBtn){
+    deleteCaseBtn.onclick = async ()=>{
+      const c = STATE.cases.find(x=>x.id===STATE.openCaseId);
+      if(!window.confirm("Delete case \""+c.label+"\"? This removes it permanently for the whole team and cannot be undone.")) return;
+      await deleteCase(c.id);
+      STATE.view = "cases";
+      STATE.openCaseId = null;
+      render();
     };
   }
   const dischargedBtn = document.getElementById("toggleDischarged");
